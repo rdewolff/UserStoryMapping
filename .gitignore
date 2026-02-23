@@ -1,0 +1,27 @@
+# Node
+node_modules/
+.npm/
+.pnpm-store/
+
+# Next.js
+.next/
+out/
+
+# Build / logs
+coverage/
+dist/
+*.log
+
+# Env
+.env
+.env.*
+!.env.example
+
+# DB
+*.db
+*.db-journal
+
+# OS / editor
+.DS_Store
+.vscode/
+.idea/
