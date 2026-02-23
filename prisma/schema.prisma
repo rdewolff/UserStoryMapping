@@ -1,0 +1,95 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "sqlite"
+}
+
+enum PriorityLane {
+  SKELETON
+  MVP
+  LOVABLE
+}
+
+enum Effort {
+  XS
+  S
+  M
+  L
+  XL
+}
+
+model User {
+  id           String    @id @default(cuid())
+  email        String    @unique
+  passwordHash String
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  sessions     Session[]
+  boards       Board[]
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  tokenHash String   @unique
+  userId    String
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Board {
+  id          String   @id @default(cuid())
+  ownerId     String
+  name        String
+  description String?
+  version     Int      @default(1)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  owner       User     @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  modules     Module[]
+  cards       Card[]
+
+  @@index([ownerId, updatedAt])
+}
+
+model Module {
+  id        String   @id @default(cuid())
+  boardId   String
+  name      String
+  position  Int
+  version   Int      @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  board     Board    @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  cards     Card[]
+
+  @@unique([boardId, position])
+  @@index([boardId])
+}
+
+model Card {
+  id           String       @id @default(cuid())
+  boardId      String
+  moduleId     String
+  title        String
+  description  String?
+  priorityLane PriorityLane
+  effort       Effort
+  weekTarget   String?
+  position     Int
+  version      Int          @default(1)
+  createdAt    DateTime     @default(now())
+  updatedAt    DateTime     @updatedAt
+  board        Board        @relation(fields: [boardId], references: [id], onDelete: Cascade)
+  module       Module       @relation(fields: [moduleId], references: [id], onDelete: Cascade)
+
+  @@unique([moduleId, priorityLane, position])
+  @@index([boardId])
+  @@index([moduleId, priorityLane])
+}
