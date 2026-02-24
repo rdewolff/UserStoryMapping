@@ -14,8 +14,10 @@ A production-ready MVP for visual user story mapping built with Next.js, TypeScr
   - `effort` (`xs|s|m|l|xl`)
   - `week_target` (`YYYY-Www`)
 - Drag and drop across modules and lanes with transactional persistence
+- CSV import with flexible column mapping (title/module/lane/effort/week)
 - Zoom controls and canvas panning (`Space + drag`)
 - Search and filtering
+- Inline double-click title editing directly on cards
 - Optimistic UI + version conflict protection (`409` handling)
 - API validation with Zod
 - Move-logic tests with Vitest
