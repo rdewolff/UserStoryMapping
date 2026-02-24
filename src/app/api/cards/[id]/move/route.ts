@@ -84,9 +84,6 @@ export async function POST(
     where: {
       moduleId: card.moduleId,
       priorityLane: sourceLane,
-      id: {
-        not: card.id,
-      },
     },
     orderBy: {
       position: "asc",
@@ -106,9 +103,6 @@ export async function POST(
         where: {
           moduleId: targetModule.id,
           priorityLane: targetLane,
-          id: {
-            not: card.id,
-          },
         },
         orderBy: {
           position: "asc",

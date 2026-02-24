@@ -30,6 +30,12 @@ import {
   type EffortLevel,
   type PriorityLane,
 } from "@/lib/constants";
+import {
+  normalizeEffort,
+  normalizeLane,
+  normalizeWeekTarget,
+  parseCsv,
+} from "@/lib/csv";
 import type { BoardDto, CardDto, ModuleDto } from "@/lib/serializers";
 
 type BoardClientProps = {
@@ -52,9 +58,43 @@ type DetailDraft = {
   weekTarget: string;
 };
 
+type CsvColumnKey =
+  | "module"
+  | "title"
+  | "description"
+  | "priorityLane"
+  | "effort"
+  | "weekTarget";
+
+type CsvColumnMapping = Record<CsvColumnKey, string>;
+
 const ZOOM_MIN = 0.6;
 const ZOOM_MAX = 1.8;
 const ZOOM_STEP = 0.1;
+const CSV_NONE = "__none__";
+
+function normalizeHeader(value: string): string {
+  return value.trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function detectHeader(headers: string[], aliases: string[]): string {
+  const aliasSet = new Set(aliases.map(normalizeHeader));
+  const match = headers.find((header) => aliasSet.has(normalizeHeader(header)));
+  return match ?? CSV_NONE;
+}
+
+function buildInitialCsvMapping(headers: string[]): CsvColumnMapping {
+  const titleHeader = detectHeader(headers, ["title", "story", "task", "name"]);
+
+  return {
+    module: detectHeader(headers, ["module", "feature", "epic", "column"]),
+    title: titleHeader !== CSV_NONE ? titleHeader : headers[0] ?? CSV_NONE,
+    description: detectHeader(headers, ["description", "details", "notes"]),
+    priorityLane: detectHeader(headers, ["lane", "priority", "slice"]),
+    effort: detectHeader(headers, ["effort", "size", "complexity"]),
+    weekTarget: detectHeader(headers, ["week", "target week", "sprint", "week target"]),
+  };
+}
 
 function containerId(moduleId: string, lane: PriorityLane): string {
   return `container:${moduleId}:${lane}`;
@@ -191,11 +231,23 @@ function CardItem({
   selected,
   disabled,
   onSelect,
+  isEditing,
+  editingTitle,
+  onDoubleEdit,
+  onEditingTitleChange,
+  onEditingSubmit,
+  onEditingCancel,
 }: {
   card: CardDto;
   selected: boolean;
   disabled: boolean;
   onSelect: (id: string) => void;
+  isEditing: boolean;
+  editingTitle: string;
+  onDoubleEdit: (card: CardDto) => void;
+  onEditingTitleChange: (value: string) => void;
+  onEditingSubmit: () => void;
+  onEditingCancel: () => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({
@@ -219,13 +271,51 @@ function CardItem({
       className={`story-card ${selected ? "story-card--selected" : ""}`}
       ref={setNodeRef}
       style={style}
-      {...attributes}
-      {...listeners}
       onClick={() => onSelect(card.id)}
+      onDoubleClick={(event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        onDoubleEdit(card);
+      }}
       tabIndex={0}
       role="button"
     >
-      <p className="text-sm font-medium leading-snug text-[var(--text)]">{card.title}</p>
+      <div className="story-card-head">
+        {isEditing ? (
+          <input
+            autoFocus
+            className="inline-title-input"
+            onBlur={onEditingSubmit}
+            onChange={(event) => onEditingTitleChange(event.target.value)}
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault();
+                onEditingSubmit();
+                return;
+              }
+
+              if (event.key === "Escape") {
+                event.preventDefault();
+                onEditingCancel();
+              }
+            }}
+            value={editingTitle}
+          />
+        ) : (
+          <p className="text-sm font-medium leading-snug text-[var(--text)]">{card.title}</p>
+        )}
+        <button
+          aria-label={`Drag ${card.title}`}
+          className="drag-handle"
+          onClick={(event) => event.stopPropagation()}
+          type="button"
+          {...attributes}
+          {...listeners}
+        >
+          ⋮⋮
+        </button>
+      </div>
       <div className="mt-3 flex items-center gap-2 text-[11px] text-[var(--text-soft)]">
         <span className="meta-chip">{card.effort.toUpperCase()}</span>
         {card.weekTarget ? <span className="meta-chip">{card.weekTarget}</span> : null}
@@ -267,6 +357,21 @@ export function BoardClient({
   const [moduleNameDraft, setModuleNameDraft] = useState("");
   const [zoom, setZoom] = useState(1);
   const [activeCardId, setActiveCardId] = useState<string | null>(null);
+  const [editingCardId, setEditingCardId] = useState<string | null>(null);
+  const [editingCardTitle, setEditingCardTitle] = useState("");
+  const [isImportOpen, setIsImportOpen] = useState(false);
+  const [isImporting, setIsImporting] = useState(false);
+  const [csvFileName, setCsvFileName] = useState<string | null>(null);
+  const [csvRawRows, setCsvRawRows] = useState<string[][]>([]);
+  const [csvHasHeaders, setCsvHasHeaders] = useState(true);
+  const [csvMapping, setCsvMapping] = useState<CsvColumnMapping>({
+    module: CSV_NONE,
+    title: CSV_NONE,
+    description: CSV_NONE,
+    priorityLane: CSV_NONE,
+    effort: CSV_NONE,
+    weekTarget: CSV_NONE,
+  });
   const [isSpacePressed, setIsSpacePressed] = useState(false);
 
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -286,7 +391,7 @@ export function BoardClient({
     effortFilter !== "all" ||
     moduleFilter !== "all";
 
-  const canDrag = !hasActiveFilters;
+  const canDrag = !hasActiveFilters && editingCardId === null;
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -312,6 +417,37 @@ export function BoardClient({
     [activeCardId, cards],
   );
 
+  const csvHeaders = useMemo(() => {
+    if (csvRawRows.length === 0) {
+      return [] as string[];
+    }
+
+    if (csvHasHeaders) {
+      return csvRawRows[0].map((value, index) =>
+        value.trim() || `column_${index + 1}`,
+      );
+    }
+
+    const longestRow = csvRawRows.reduce(
+      (max, row) => Math.max(max, row.length),
+      0,
+    );
+    return Array.from({ length: longestRow }, (_, index) => `column_${index + 1}`);
+  }, [csvRawRows, csvHasHeaders]);
+
+  const csvDataRows = useMemo(() => {
+    if (csvRawRows.length === 0) {
+      return [] as string[][];
+    }
+
+    return csvHasHeaders ? csvRawRows.slice(1) : csvRawRows;
+  }, [csvRawRows, csvHasHeaders]);
+
+  const csvHeaderIndex = useMemo(
+    () => new Map(csvHeaders.map((header, index) => [header, index])),
+    [csvHeaders],
+  );
+
   useEffect(() => {
     if (!selectedCard) {
       setDetailDraft(null);
@@ -320,6 +456,40 @@ export function BoardClient({
 
     setDetailDraft(createDraft(selectedCard));
   }, [selectedCard]);
+
+  useEffect(() => {
+    if (csvHeaders.length === 0) {
+      return;
+    }
+
+    const defaults = buildInitialCsvMapping(csvHeaders);
+
+    setCsvMapping((previous) => {
+      const next = { ...previous };
+
+      (Object.keys(defaults) as CsvColumnKey[]).forEach((key) => {
+        const existing = previous[key];
+        if (existing !== CSV_NONE && csvHeaders.includes(existing)) {
+          next[key] = existing;
+          return;
+        }
+        next[key] = defaults[key];
+      });
+
+      return next;
+    });
+  }, [csvHeaders]);
+
+  useEffect(() => {
+    if (!editingCardId) {
+      return;
+    }
+
+    const stillExists = cards.some((card) => card.id === editingCardId);
+    if (!stillExists) {
+      cancelInlineCardEdit();
+    }
+  }, [cards, editingCardId]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -390,6 +560,161 @@ export function BoardClient({
     return sortByPosition(
       source.filter((card) => card.moduleId === moduleId && card.priorityLane === lane),
     );
+  }
+
+  function getCsvCellValue(row: string[], mappedColumn: string): string {
+    if (mappedColumn === CSV_NONE) {
+      return "";
+    }
+
+    const index = csvHeaderIndex.get(mappedColumn);
+    if (index === undefined) {
+      return "";
+    }
+
+    return row[index]?.trim() ?? "";
+  }
+
+  async function refreshBoardSnapshot() {
+    const response = await fetch(`/api/boards/${board.id}`, {
+      method: "GET",
+      credentials: "include",
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as
+        | { error?: string }
+        | null;
+      throw new Error(payload?.error ?? "Could not refresh board");
+    }
+
+    const payload = (await response.json()) as {
+      board: BoardDto;
+      modules: ModuleDto[];
+      cards: CardDto[];
+    };
+
+    setBoard(payload.board);
+    setBoardNameDraft(payload.board.name);
+    setModules(sortByPosition(payload.modules));
+    setCards(payload.cards);
+  }
+
+  async function onCsvFileSelected(event: React.ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+
+    try {
+      const text = await file.text();
+      const rows = parseCsv(text);
+      setCsvRawRows(rows);
+      setCsvFileName(file.name);
+      setErrorMessage(null);
+    } catch {
+      markError("Could not parse CSV file");
+    } finally {
+      event.target.value = "";
+    }
+  }
+
+  async function importFromCsv() {
+    if (csvDataRows.length === 0) {
+      markError("No CSV rows to import");
+      return;
+    }
+
+    if (csvMapping.title === CSV_NONE) {
+      markError("Please map a title column before importing");
+      return;
+    }
+
+    setIsImporting(true);
+    setErrorMessage(null);
+    markSaving();
+
+    try {
+      const moduleByName = new Map(
+        modules.map((moduleRecord) => [
+          moduleRecord.name.trim().toLowerCase(),
+          moduleRecord.id,
+        ]),
+      );
+
+      for (const row of csvDataRows) {
+        const title = getCsvCellValue(row, csvMapping.title);
+        if (!title) {
+          continue;
+        }
+
+        const moduleNameRaw = getCsvCellValue(row, csvMapping.module);
+        const moduleName = moduleNameRaw || "General";
+        const moduleKey = moduleName.trim().toLowerCase();
+
+        let moduleId = moduleByName.get(moduleKey);
+
+        if (!moduleId) {
+          const moduleResponse = await fetch(`/api/boards/${board.id}/modules`, {
+            method: "POST",
+            credentials: "include",
+            headers: {
+              "Content-Type": "application/json",
+            },
+            body: JSON.stringify({
+              name: moduleName,
+            }),
+          });
+
+          if (!moduleResponse.ok) {
+            const payload = (await moduleResponse.json().catch(() => null)) as
+              | { error?: string }
+              | null;
+            throw new Error(payload?.error ?? "Could not create module during import");
+          }
+
+          const modulePayload = (await moduleResponse.json()) as { module: ModuleDto };
+          moduleId = modulePayload.module.id;
+          moduleByName.set(moduleKey, moduleId);
+          setModules((previous) => sortByPosition([...previous, modulePayload.module]));
+        }
+
+        const lane = normalizeLane(getCsvCellValue(row, csvMapping.priorityLane));
+        const effort = normalizeEffort(getCsvCellValue(row, csvMapping.effort));
+        const description = getCsvCellValue(row, csvMapping.description) || null;
+        const weekTarget = normalizeWeekTarget(getCsvCellValue(row, csvMapping.weekTarget));
+
+        const cardResponse = await fetch(`/api/boards/${board.id}/cards`, {
+          method: "POST",
+          credentials: "include",
+          headers: {
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            moduleId,
+            title,
+            description,
+            priorityLane: lane,
+            effort,
+            weekTarget,
+          }),
+        });
+
+        if (!cardResponse.ok) {
+          const payload = (await cardResponse.json().catch(() => null)) as
+            | { error?: string }
+            | null;
+          throw new Error(payload?.error ?? "Could not create card during import");
+        }
+      }
+
+      await refreshBoardSnapshot();
+      markSaved();
+    } catch (importError) {
+      markError(importError instanceof Error ? importError.message : "Import failed");
+    } finally {
+      setIsImporting(false);
+    }
   }
 
   async function createModule() {
@@ -577,10 +902,10 @@ export function BoardClient({
     }
   }
 
-  async function updateCard(cardId: string, patch: Partial<CardDto>) {
+  async function updateCard(cardId: string, patch: Partial<CardDto>): Promise<boolean> {
     const existing = cards.find((card) => card.id === cardId);
     if (!existing) {
-      return;
+      return false;
     }
 
     const optimistic: CardDto = {
@@ -620,11 +945,13 @@ export function BoardClient({
       const payload = (await response.json()) as { card: CardDto };
       setCardsFromServer([payload.card]);
       markSaved();
+      return true;
     } catch (updateError) {
       setCards((previous) =>
         previous.map((card) => (card.id === cardId ? existing : card)),
       );
       markError(updateError instanceof Error ? updateError.message : "Could not update card");
+      return false;
     }
   }
 
@@ -643,6 +970,41 @@ export function BoardClient({
     await updateCard(selectedCard.id, patch);
   }
 
+  function startInlineCardEdit(card: CardDto) {
+    setSelectedCardId(card.id);
+    setEditingCardId(card.id);
+    setEditingCardTitle(card.title);
+  }
+
+  function cancelInlineCardEdit() {
+    setEditingCardId(null);
+    setEditingCardTitle("");
+  }
+
+  async function submitInlineCardEdit(cardId: string) {
+    const title = editingCardTitle.trim();
+    if (!title) {
+      markError("Card title cannot be empty");
+      return;
+    }
+
+    const existing = cards.find((card) => card.id === cardId);
+    if (!existing) {
+      cancelInlineCardEdit();
+      return;
+    }
+
+    if (existing.title === title) {
+      cancelInlineCardEdit();
+      return;
+    }
+
+    const wasUpdated = await updateCard(cardId, { title });
+    if (wasUpdated) {
+      cancelInlineCardEdit();
+    }
+  }
+
   async function deleteCard(cardId: string) {
     const confirmed = window.confirm("Delete this card?");
     if (!confirmed) {
@@ -654,6 +1016,9 @@ export function BoardClient({
     setCards((previous) => previous.filter((card) => card.id !== cardId));
     if (selectedCardId === cardId) {
       setSelectedCardId(null);
+    }
+    if (editingCardId === cardId) {
+      cancelInlineCardEdit();
     }
 
     markSaving();
@@ -739,6 +1104,16 @@ export function BoardClient({
     dragSnapshotRef.current = cards;
     setActiveCardId(existing.id);
     setErrorMessage(null);
+  }
+
+  function onDragCancel() {
+    const snapshot = dragSnapshotRef.current;
+    dragSnapshotRef.current = null;
+    setActiveCardId(null);
+
+    if (snapshot) {
+      setCards(snapshot);
+    }
   }
 
   async function onDragEnd(event: DragEndEvent) {
@@ -1011,32 +1386,148 @@ export function BoardClient({
       {errorMessage ? <div className="board-error">{errorMessage}</div> : null}
 
       <div className="board-utility-bar">
-        <form
-          className="flex items-center gap-3"
-          onSubmit={(event) => {
-            event.preventDefault();
-            void createModule();
-          }}
-        >
-          <input
-            className="input input-compact min-w-[220px]"
-            onChange={(event) => setModuleNameDraft(event.target.value)}
-            placeholder="New module name"
-            value={moduleNameDraft}
-          />
-          <button className="primary-btn" type="submit">
-            Add module
+        <div className="utility-row">
+          <form
+            className="flex items-center gap-3"
+            onSubmit={(event) => {
+              event.preventDefault();
+              void createModule();
+            }}
+          >
+            <input
+              className="input input-compact min-w-[220px]"
+              onChange={(event) => setModuleNameDraft(event.target.value)}
+              placeholder="New module name"
+              value={moduleNameDraft}
+            />
+            <button className="primary-btn" type="submit">
+              Add module
+            </button>
+          </form>
+
+          <button
+            className="secondary-btn"
+            onClick={() => setIsImportOpen((current) => !current)}
+            type="button"
+          >
+            {isImportOpen ? "Close CSV Import" : "Import CSV"}
           </button>
-        </form>
-        {hasActiveFilters ? (
+        </div>
+
+        <div className="utility-row">
+          {editingCardId ? (
+            <p className="text-xs text-[var(--text-soft)]">
+              Drag and drop is paused while inline editing is active.
+            </p>
+          ) : hasActiveFilters ? (
+            <p className="text-xs text-[var(--text-soft)]">
+              Drag and drop is disabled while filters are active.
+            </p>
+          ) : (
+            <p className="text-xs text-[var(--text-soft)]">
+              Tip: hold Space and drag to pan. Drag cards to reprioritize.
+            </p>
+          )}
           <p className="text-xs text-[var(--text-soft)]">
-            Drag and drop is disabled while filters are active.
+            Tip: double-click a card title to edit inline.
           </p>
-        ) : (
-          <p className="text-xs text-[var(--text-soft)]">
-            Tip: hold Space and drag to pan. Drag cards to reprioritize.
-          </p>
-        )}
+        </div>
+
+        {isImportOpen ? (
+          <div className="csv-import-panel">
+            <div className="csv-import-top">
+              <label className="csv-file-input">
+                <span>Upload CSV</span>
+                <input accept=".csv,text/csv" onChange={onCsvFileSelected} type="file" />
+              </label>
+              <label className="csv-header-toggle">
+                <input
+                  checked={csvHasHeaders}
+                  onChange={(event) => setCsvHasHeaders(event.target.checked)}
+                  type="checkbox"
+                />
+                First row contains headers
+              </label>
+              <button
+                className="primary-btn"
+                disabled={isImporting || csvDataRows.length === 0 || csvMapping.title === CSV_NONE}
+                onClick={() => {
+                  void importFromCsv();
+                }}
+                type="button"
+              >
+                {isImporting ? "Importing..." : "Import rows"}
+              </button>
+            </div>
+
+            <div className="csv-meta-row">
+              <span>{csvFileName ?? "No file selected"}</span>
+              <span>{csvDataRows.length} rows detected</span>
+            </div>
+
+            <div className="csv-mapping-grid">
+              {(
+                [
+                  ["title", "Title (required)"],
+                  ["module", "Module / Feature"],
+                  ["description", "Description"],
+                  ["priorityLane", "Priority lane"],
+                  ["effort", "Effort"],
+                  ["weekTarget", "Target week"],
+                ] as const
+              ).map(([key, label]) => (
+                <label className="csv-map-field" key={key}>
+                  <span>{label}</span>
+                  <select
+                    className="input input-compact"
+                    onChange={(event) =>
+                      setCsvMapping((previous) => ({
+                        ...previous,
+                        [key]: event.target.value,
+                      }))
+                    }
+                    value={csvMapping[key]}
+                  >
+                    <option value={CSV_NONE}>Not mapped</option>
+                    {csvHeaders.map((header) => (
+                      <option key={header} value={header}>
+                        {header}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              ))}
+            </div>
+
+            {csvDataRows.length > 0 && csvHeaders.length > 0 ? (
+              <div className="csv-preview">
+                <p className="csv-preview-title">Preview</p>
+                <div className="csv-preview-table-wrap">
+                  <table className="csv-preview-table">
+                    <thead>
+                      <tr>
+                        {csvHeaders.map((header) => (
+                          <th key={header}>{header}</th>
+                        ))}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {csvDataRows.slice(0, 3).map((row, rowIndex) => (
+                        <tr key={`row-${rowIndex}`}>
+                          {csvHeaders.map((header, headerIndex) => (
+                            <td key={`${rowIndex}-${header}`}>
+                              {row[headerIndex] ?? ""}
+                            </td>
+                          ))}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            ) : null}
+          </div>
+        ) : null}
       </div>
 
       <div
@@ -1049,6 +1540,7 @@ export function BoardClient({
       >
         <DndContext
           collisionDetection={closestCorners}
+          onDragCancel={onDragCancel}
           onDragEnd={(event) => {
             void onDragEnd(event);
           }}
@@ -1128,7 +1620,17 @@ export function BoardClient({
                               <CardItem
                                 card={card}
                                 disabled={!canDrag}
+                                editingTitle={
+                                  editingCardId === card.id ? editingCardTitle : card.title
+                                }
+                                isEditing={editingCardId === card.id}
                                 key={card.id}
+                                onDoubleEdit={startInlineCardEdit}
+                                onEditingCancel={cancelInlineCardEdit}
+                                onEditingSubmit={() => {
+                                  void submitInlineCardEdit(card.id);
+                                }}
+                                onEditingTitleChange={setEditingCardTitle}
                                 onSelect={setSelectedCardId}
                                 selected={card.id === selectedCardId}
                               />

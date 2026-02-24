@@ -1,6 +1,9 @@
 @import "tailwindcss";
 
 :root {
+  --font-geist-sans: "Avenir Next", "Segoe UI", "SF Pro Text", system-ui, sans-serif;
+  --font-playfair: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", serif;
+
   --bg: hsl(60 20% 98%);
   --surface: hsl(60 10% 95%);
   --surface-strong: hsl(0 0% 100%);
@@ -292,11 +295,115 @@ a {
 .board-utility-bar {
   grid-column: 1 / 2;
   display: flex;
-  align-items: center;
-  justify-content: space-between;
+  flex-direction: column;
+  align-items: stretch;
   gap: 1rem;
   padding: 0.75rem 1rem;
   border-bottom: 1px solid var(--border);
+}
+
+.utility-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  flex-wrap: wrap;
+}
+
+.csv-import-panel {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: hsl(0 0% 100% / 0.7);
+  padding: 0.75rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.csv-import-top {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.csv-file-input {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.csv-file-input input {
+  font-size: 0.78rem;
+}
+
+.csv-header-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+.csv-meta-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  font-size: 0.75rem;
+  color: var(--text-soft);
+}
+
+.csv-mapping-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 0.55rem;
+}
+
+.csv-map-field {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+
+.csv-preview {
+  border-top: 1px dashed var(--border);
+  padding-top: 0.65rem;
+}
+
+.csv-preview-title {
+  margin: 0 0 0.35rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.csv-preview-table-wrap {
+  overflow: auto;
+}
+
+.csv-preview-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.72rem;
+}
+
+.csv-preview-table th,
+.csv-preview-table td {
+  border: 1px solid hsl(0 0% 35% / 0.15);
+  padding: 0.3rem 0.4rem;
+  text-align: left;
+  white-space: nowrap;
+}
+
+.csv-preview-table th {
+  background: hsl(60 16% 94%);
+  color: var(--text-muted);
+  font-weight: 600;
 }
 
 .board-viewport {
@@ -434,11 +541,7 @@ a {
   background: hsl(0 0% 100% / 0.95);
   box-shadow: var(--shadow-soft);
   padding: 0.62rem;
-  cursor: grab;
-}
-
-.story-card:active {
-  cursor: grabbing;
+  cursor: default;
 }
 
 .story-card--selected {
@@ -456,6 +559,45 @@ a {
   border: 1px solid var(--border);
   background: hsl(0 0% 100% / 0.76);
   padding: 0.15rem 0.4rem;
+}
+
+.story-card-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.35rem;
+}
+
+.drag-handle {
+  border: 1px solid hsl(0 0% 40% / 0.22);
+  background: hsl(0 0% 100% / 0.9);
+  color: var(--text-soft);
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  display: grid;
+  place-items: center;
+  font-size: 13px;
+  line-height: 1;
+  cursor: grab;
+  touch-action: none;
+}
+
+.drag-handle:active {
+  cursor: grabbing;
+}
+
+.inline-title-input {
+  flex: 1;
+  min-width: 0;
+  border: 1px solid hsl(207 56% 70%);
+  border-radius: 8px;
+  background: #fff;
+  font-size: 0.84rem;
+  line-height: 1.2rem;
+  padding: 0.22rem 0.45rem;
+  color: var(--text);
+  outline: none;
 }
 
 .details-panel {
